@@ -35,11 +35,11 @@ URL/key publishable memang digunakan aplikasi browser; keamanan database bergant
 ## Fitur
 
 - Katalog dan detail produk dapat dilihat tanpa akun; wishlist, keranjang, checkout, profil, dan riwayat pesanan memerlukan akun Supabase.
-- Event komunitas mendukung RSVP untuk pengguna yang masuk.
-- Komunitas menyediakan feed inspirasi, tombol suka, dan formulir berbagi cerita untuk pengguna yang masuk.
+- Setiap event memiliki halaman detail, susunan acara, informasi lokasi/waktu, dan pendaftaran RSVP. Pengguna yang masuk mendapat tiket QR unik yang tersimpan di data akunnya dan dapat dicetak.
+- Cerita komunitas dibagikan lintas pengguna melalui Supabase dan dipecah menjadi ruang Outfit harian, Mix & match, Brand lokal, Gaya berkelanjutan, dan Event Nusa; semua orang dapat melihat feed, sedangkan pengguna yang masuk dapat memposting cerita, mengunggah foto opsional, dan menyukai cerita.
 - Profil dan state belanja tersimpan di Supabase per akun dan dapat dikelola pemilik toko di Supabase Dashboard.
 
-Gambar katalog disimpan di `public/images/` dan bersumber dari Unsplash. Gambar-gambar tersebut adalah foto stok, bukan salinan dari Pinterest; periksa lisensi dan ketentuan penggunaan sebelum menerbitkan toko. Pembayaran masih simulasi dan konfirmasi pesanan dilakukan manual. Data event dan komunitas masih mengikuti state akun masing-masing; interaksi tersebut belum berupa feed bersama lintas akun.
+Jalankan kembali seluruh isi `supabase/schema.sql` di Supabase SQL Editor untuk membuat feed bersama, ruang kategori, dan bucket `community-images`. Jika unggahan cerita gagal karena tabel atau bucket belum tersedia, jalankan kembali schema tersebut, lalu gunakan tombol **Muat ulang cerita**. Foto cerita menerima JPG, PNG, atau WebP hingga 5 MB; tanpa foto, aplikasi memakai `public/images/community-style.jpg`. Gambar katalog disimpan di `public/images/` dan bersumber dari Unsplash. Gambar-gambar tersebut adalah foto stok, bukan salinan dari Pinterest; periksa lisensi dan ketentuan penggunaan sebelum menerbitkan toko. Pembayaran masih simulasi dan konfirmasi pesanan dilakukan manual. RSVP dan tiket QR event disimpan pada data akun Supabase yang dilindungi RLS. QR berisi kode tiket unik agar dapat dibaca pemindai QR; aplikasi belum menyediakan halaman panitia untuk memvalidasi check-in secara otoritatif. Sebelum dipakai untuk acara berbayar atau check-in resmi, tambahkan endpoint/backend dan akses panitia agar tiket tidak dapat dipalsukan atau dipakai ulang.
 
 ## Kontak contoh
 
