@@ -235,6 +235,111 @@ create table if not exists public.store_orders (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.password_reset_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  status text not null default 'pending'
+    check (status in ('pending', 'approved', 'rejected', 'completed')),
+  created_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+
+create or replace function public.remove_deleted_store_order_from_customer_data()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.customer_data as customer
+  set data = pg_catalog.jsonb_set(
+    customer.data,
+    '{orders}',
+    coalesce(
+      (
+        select pg_catalog.jsonb_agg(order_entry.value order by order_entry.ordinal)
+        from pg_catalog.jsonb_array_elements(customer.data -> 'orders')
+          with ordinality as order_entry(value, ordinal)
+        where order_entry.value ->> 'id' is distinct from old.id
+      ),
+      '[]'::jsonb
+    ),
+    true
+  )
+  where customer.user_id = old.user_id
+    and pg_catalog.jsonb_typeof(customer.data -> 'orders') = 'array';
+  return old;
+end;
+$$;
+
+revoke all on function public.remove_deleted_store_order_from_customer_data()
+  from public, anon, authenticated;
+
+drop trigger if exists remove_legacy_store_order_data on public.store_orders;
+create trigger remove_legacy_store_order_data
+  after delete on public.store_orders
+  for each row execute function public.remove_deleted_store_order_from_customer_data();
+
+create unique index if not exists password_reset_requests_one_pending_per_user_idx
+  on public.password_reset_requests (user_id)
+  where status = 'pending';
+
+create or replace function public.request_password_reset(p_email text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_email is null or char_length(trim(p_email)) > 254 then
+    return;
+  end if;
+
+  insert into public.password_reset_requests (user_id)
+  select auth_user.id
+  from auth.users as auth_user
+  where lower(auth_user.email) = lower(trim(p_email))
+    and not exists (
+      select 1
+      from public.password_reset_requests as reset_request
+      where reset_request.user_id = auth_user.id
+        and reset_request.created_at > now() - interval '10 minutes'
+    )
+  on conflict (user_id) where status = 'pending' do nothing;
+end;
+$$;
+
+revoke all on function public.request_password_reset(text) from public;
+grant execute on function public.request_password_reset(text) to anon, authenticated;
+
+create or replace function public.complete_password_reset_request()
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  completed_request_id uuid;
+begin
+  update public.password_reset_requests
+  set status = 'completed'
+  where id = (
+    select reset_request.id
+    from public.password_reset_requests as reset_request
+    where reset_request.user_id = (select auth.uid())
+      and reset_request.status = 'approved'
+    order by reset_request.reviewed_at desc nulls last,
+      reset_request.created_at desc
+    limit 1
+  )
+  returning id into completed_request_id;
+  return completed_request_id is not null;
+end;
+$$;
+
+revoke all on function public.complete_password_reset_request() from public, anon;
+grant execute on function public.complete_password_reset_request() to authenticated;
+
 create table if not exists public.product_reviews (
   id uuid primary key default gen_random_uuid(),
   product_id text not null references public.store_products (id) on delete cascade,
@@ -311,17 +416,22 @@ alter table public.store_admins enable row level security;
 alter table public.store_products enable row level security;
 alter table public.store_events enable row level security;
 alter table public.store_orders enable row level security;
+alter table public.password_reset_requests enable row level security;
 
 revoke all on public.store_admins from anon, authenticated;
 revoke all on public.store_products from anon, authenticated;
 revoke all on public.store_events from anon, authenticated;
 revoke all on public.store_orders from anon, authenticated;
+revoke all on public.password_reset_requests from anon, authenticated;
 
 grant select on public.store_admins to authenticated;
 grant select on public.store_products, public.store_events to anon, authenticated;
 grant insert, update, delete on public.store_products, public.store_events to authenticated;
 grant select, insert on public.store_orders to authenticated;
 grant update (status) on public.store_orders to authenticated;
+grant delete on public.store_orders to authenticated;
+grant select, update (status, reviewed_at)
+  on public.password_reset_requests to authenticated;
 
 create or replace function public.is_store_admin()
 returns boolean
@@ -339,6 +449,29 @@ $$;
 
 revoke all on function public.is_store_admin() from public, anon;
 grant execute on function public.is_store_admin() to authenticated;
+
+create or replace function public.sync_profile_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.email is distinct from old.email then
+    update public.profiles
+    set email = new.email
+    where id = new.id;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_profile_email() from public, anon, authenticated;
+
+drop trigger if exists sync_nusa_profile_email on auth.users;
+create trigger sync_nusa_profile_email
+  after update of email on auth.users
+  for each row execute function public.sync_profile_email();
 
 create or replace function public.can_review_store_product(p_product_id text)
 returns boolean
@@ -458,6 +591,30 @@ create policy "Customers can create their own store orders"
 drop policy if exists "Admins can update store order status" on public.store_orders;
 create policy "Admins can update store order status"
   on public.store_orders for update to authenticated
+  using ((select public.is_store_admin()))
+  with check ((select public.is_store_admin()));
+
+drop policy if exists "Admins can delete store orders" on public.store_orders;
+create policy "Admins can delete store orders"
+  on public.store_orders for delete to authenticated
+  using ((select public.is_store_admin()));
+
+drop policy if exists "Customers can read their own password reset requests"
+  on public.password_reset_requests;
+create policy "Customers can read their own password reset requests"
+  on public.password_reset_requests for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+drop policy if exists "Admins can read password reset requests"
+  on public.password_reset_requests;
+create policy "Admins can read password reset requests"
+  on public.password_reset_requests for select to authenticated
+  using ((select public.is_store_admin()));
+
+drop policy if exists "Admins can review password reset requests"
+  on public.password_reset_requests;
+create policy "Admins can review password reset requests"
+  on public.password_reset_requests for update to authenticated
   using ((select public.is_store_admin()))
   with check ((select public.is_store_admin()));
 

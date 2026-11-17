@@ -2,11 +2,26 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadEnv } from 'vite';
+import adminUsersHandler from './api/admin-users.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const production = process.env.NODE_ENV === 'production';
+for (const [key, value] of Object.entries(loadEnv(production ? 'production' : 'development', root, ''))) {
+  if (process.env[key] === undefined) process.env[key] = value;
+}
 const vite = production ? null : await import('vite').then(({ createServer: createViteServer }) => createViteServer({ configFile: false, root, appType: 'spa', server: { middlewareMode: true } }));
 const server = createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname === '/api/admin-users') {
+    adminUsersHandler(req, res).catch((error) => {
+      console.error('Admin user endpoint failed:', error);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Terjadi kesalahan server.' }));
+      }
+    });
+    return;
+  }
   if (vite) {
     vite.middlewares(req, res, () => { res.statusCode = 404; res.end('Not found'); });
     return;

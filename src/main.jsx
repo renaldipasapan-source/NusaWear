@@ -983,6 +983,11 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/masuk" element={<Auth />} />
           <Route path="/daftar" element={<Auth register />} />
+          <Route path="/lupa-password" element={<PasswordResetRequest />} />
+          <Route
+            path="/atur-ulang-password"
+            element={<PasswordResetForm />}
+          />
           <Route path="/tentang" element={<About />} />
           <Route path="/kontak" element={<Contact />} />
           <Route path="/event" element={<EventsPage />} />
@@ -2455,6 +2460,240 @@ function Auth({ register = false }) {
             {register ? "Masuk di sini" : "Daftar gratis"}
           </Link>
         </p>
+        {!register && (
+          <p className="auth-switch">
+            Lupa kata sandi? <Link to="/lupa-password">Atur ulang</Link>
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+function PasswordResetRequest() {
+  const { supabaseConfigured } = useStore();
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setSubmitting(true);
+    try {
+      if (!supabase)
+        throw new Error(
+          "Hubungkan Supabase dengan mengisi VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di file .env.local, lalu restart server.",
+        );
+      const { error: resetError } = await supabase.rpc(
+        "request_password_reset",
+        { p_email: email.trim().toLowerCase() },
+      );
+      if (resetError) throw resetError;
+      setMessage(
+        "Jika email terdaftar, permintaan reset sudah diajukan untuk ditinjau admin. Jika disetujui, tautan akan dikirim ke email akun.",
+      );
+    } catch (resetError) {
+      setError(resetError.message || "Gagal mengirim tautan. Silakan coba lagi.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="auth-shell auth-single-column">
+      <section className="auth-form-wrap">
+        <Link to="/" className="brand auth-brand">
+          <span className="brand-mark">nw</span>
+          <span>
+            NUSA<span className="brand-light">WEAR</span>
+            <small>SiriousLei Store</small>
+          </span>
+        </Link>
+        <h1>Lupa kata sandi?</h1>
+        <p>
+          Masukkan email akun. Admin akan meninjau permintaan sebelum tautan
+          reset dikirim.
+        </p>
+        <form onSubmit={submit} className="auth-form">
+          <label htmlFor="reset-email">
+            Email
+            <input
+              id="reset-email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="nama@email.com"
+            />
+          </label>
+          {error && <p className="error-note" role="alert">{error}</p>}
+          {message && <p className="success-note" role="status">{message}</p>}
+          <button
+            className="btn-primary full-btn"
+            disabled={submitting || !supabaseConfigured}
+          >
+            {submitting ? "Mengirim..." : "Ajukan reset kata sandi"}
+          </button>
+        </form>
+        {!supabaseConfigured && (
+          <p className="error-note">
+            Supabase belum dikonfigurasi. Isi `.env.local` sebelum mengaktifkan
+            reset kata sandi.
+          </p>
+        )}
+        <p className="auth-switch">
+          Ingat kata sandi? <Link to="/masuk">Kembali masuk</Link>
+        </p>
+      </section>
+    </div>
+  );
+}
+function PasswordResetForm() {
+  const { authReady, user } = useStore();
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [approvalReady, setApprovalReady] = useState(false);
+  const [hasApproval, setHasApproval] = useState(false);
+  const [approvedUserId, setApprovedUserId] = useState("");
+
+  useEffect(() => {
+    setApprovalReady(false);
+    setHasApproval(false);
+    setApprovedUserId("");
+    setError("");
+    setMessage("");
+    if (!authReady) return undefined;
+    if (!user || !supabase) {
+      setApprovalReady(true);
+      return undefined;
+    }
+    let active = true;
+    supabase
+      .from("password_reset_requests")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("status", "approved")
+      .order("reviewed_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data, error: approvalError }) => {
+        if (!active) return;
+        if (approvalError)
+          setError(`Gagal memeriksa persetujuan admin: ${approvalError.message}`);
+        setHasApproval(Boolean(data));
+        if (data) setApprovedUserId(user.id);
+        setApprovalReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authReady, user?.id]);
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    const data = new FormData(event.currentTarget);
+    const password = String(data.get("password"));
+    if (password !== data.get("confirmPassword")) {
+      setError("Konfirmasi kata sandi tidak sama.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (!supabase) throw new Error("Supabase belum terhubung.");
+      const { error: updateError } = await supabase.auth.updateUser({ password });
+      if (updateError) throw updateError;
+      const { data: completed, error: completionError } = await supabase.rpc(
+        "complete_password_reset_request",
+      );
+      if (completionError)
+        throw new Error(
+          `Kata sandi telah diperbarui, tetapi status persetujuan belum dapat ditutup: ${completionError.message}`,
+        );
+      if (!completed)
+        throw new Error(
+          "Kata sandi telah diperbarui, tetapi permintaan persetujuan tidak ditemukan untuk ditutup.",
+        );
+      setMessage("Kata sandi berhasil diperbarui.");
+      setHasApproval(false);
+      setApprovedUserId("");
+    } catch (updateError) {
+      setError(
+        updateError.message ||
+          "Tautan reset tidak valid atau sudah kedaluwarsa. Minta tautan baru.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="auth-shell auth-single-column">
+      <section className="auth-form-wrap">
+        <Link to="/" className="brand auth-brand">
+          <span className="brand-mark">nw</span>
+          <span>
+            NUSA<span className="brand-light">WEAR</span>
+            <small>SiriousLei Store</small>
+          </span>
+        </Link>
+        <h1>Atur kata sandi baru.</h1>
+        {error && <p className="error-note" role="alert">{error}</p>}
+        {!authReady || !approvalReady ? (
+          <p>Memeriksa sesi dan persetujuan reset...</p>
+        ) : message ? (
+          <>
+            <p className="success-note" role="status">{message}</p>
+            <Link to="/akun">Kembali ke akun</Link>
+          </>
+        ) : user && hasApproval && approvedUserId === user.id ? (
+          <>
+            <p>Pilih kata sandi baru minimal 8 karakter.</p>
+            <form onSubmit={submit} className="auth-form">
+              <label htmlFor="reset-new-password">
+                Kata sandi baru
+                <input
+                  id="reset-new-password"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength="8"
+                  required
+                />
+              </label>
+              <label htmlFor="reset-confirm-password">
+                Konfirmasi kata sandi baru
+                <input
+                  id="reset-confirm-password"
+                  name="confirmPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength="8"
+                  required
+                />
+              </label>
+              <button className="btn-primary full-btn" disabled={submitting}>
+                {submitting ? "Menyimpan..." : "Simpan kata sandi baru"}
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <p>
+              {!user
+                ? "Sesi reset tidak ditemukan. Buka tautan reset dari email."
+                : "Belum ada permintaan reset yang disetujui admin untuk akun ini."}
+            </p>
+            <Link className="btn-primary" to="/lupa-password">
+              Minta tautan reset baru
+            </Link>
+          </>
+        )}
       </section>
     </div>
   );
@@ -2464,6 +2703,9 @@ function Account() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
   async function saveProfile(event) {
     event.preventDefault();
     setSaving(true);
@@ -2473,6 +2715,29 @@ function Account() {
     if (saveError) setError(`Gagal memperbarui profil: ${saveError.message}`);
     else setMessage("Profil berhasil diperbarui.");
     setSaving(false);
+  }
+  async function requestPasswordChange(event) {
+    event.preventDefault();
+    setPasswordMessage("");
+    setPasswordError("");
+    setPasswordSaving(true);
+    try {
+      if (!supabase) throw new Error("Supabase belum terhubung.");
+      const { error: requestError } = await supabase.rpc(
+        "request_password_reset",
+        { p_email: user.email },
+      );
+      if (requestError) throw requestError;
+      setPasswordMessage(
+        "Permintaan dikirim untuk ditinjau admin. Jika disetujui, tautan reset akan dikirim ke email akun.",
+      );
+    } catch (requestError) {
+      setPasswordError(
+        `Gagal mengajukan perubahan kata sandi: ${requestError.message || "Silakan coba lagi."}`,
+      );
+    } finally {
+      setPasswordSaving(false);
+    }
   }
   return (
     <div className="page-container">
@@ -2490,22 +2755,40 @@ function Account() {
           <NavLink to="/wishlist">Wishlist</NavLink>
           <button onClick={signOut}>Keluar dari akun</button>
         </div>
-        <form className="account-card" onSubmit={saveProfile}>
-          <h2>Informasi profil</h2>
-          <label>
-            Nama lengkap
-            <input name="name" defaultValue={user.name} required />
-          </label>
-          <label>
-            Email
-            <input value={user.email} readOnly />
-          </label>
-          {message && <p className="success-note">✓ {message}</p>}
-          {error && <p className="error-note">{error}</p>}
-          <button className="btn-primary" disabled={saving}>
-            {saving ? "Menyimpan..." : "Simpan perubahan"}
-          </button>
-        </form>
+        <div className="account-cards">
+          <form className="account-card" onSubmit={saveProfile}>
+            <h2>Informasi profil</h2>
+            <label>
+              Nama lengkap
+              <input name="name" defaultValue={user.name} required />
+            </label>
+            <label>
+              Email
+              <input value={user.email} readOnly />
+            </label>
+            {message && <p className="success-note">✓ {message}</p>}
+            {error && <p className="error-note">{error}</p>}
+            <button className="btn-primary" disabled={saving}>
+              {saving ? "Menyimpan..." : "Simpan perubahan"}
+            </button>
+          </form>
+          <form className="account-card" onSubmit={requestPasswordChange}>
+            <h2>Ganti kata sandi</h2>
+            <p>
+              Perubahan kata sandi perlu persetujuan admin. Jika disetujui,
+              tautan atur ulang akan dikirim ke email akunmu.
+            </p>
+            {passwordMessage && (
+              <p className="success-note" role="status">{passwordMessage}</p>
+            )}
+            {passwordError && (
+              <p className="error-note" role="alert">{passwordError}</p>
+            )}
+            <button className="btn-primary" disabled={passwordSaving}>
+              {passwordSaving ? "Mengirim..." : "Ajukan ganti kata sandi"}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -2608,16 +2891,21 @@ function AdminDashboard() {
   ];
   const [orders, setOrders] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [passwordResetRequests, setPasswordResetRequests] = useState([]);
   const [communityRooms, setCommunityRooms] = useState([]);
   const [activeTab, setActiveTab] = useState(
     validTabs.includes(tabParam) ? tabParam : "laporan",
   );
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
+  const [loadingResetRequests, setLoadingResetRequests] = useState(true);
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [usersError, setUsersError] = useState("");
+  const [resetRequestsError, setResetRequestsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [updatingOrderId, setUpdatingOrderId] = useState("");
+  const [updatingUserId, setUpdatingUserId] = useState("");
+  const [reviewingRequestId, setReviewingRequestId] = useState("");
   const [usersRefreshKey, setUsersRefreshKey] = useState(0);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -2665,6 +2953,35 @@ function AdminDashboard() {
   }, [usersRefreshKey]);
   useEffect(() => {
     let active = true;
+    async function loadPasswordResetRequests() {
+      try {
+        const { data, error: loadError } = await supabase
+          .from("password_reset_requests")
+          .select("id, user_id, created_at")
+          .eq("status", "pending")
+          .order("created_at", { ascending: true });
+        if (loadError) throw loadError;
+        if (!active) return;
+        setPasswordResetRequests(data || []);
+        setResetRequestsError("");
+      } catch (loadError) {
+        if (active)
+          setResetRequestsError(
+            `Gagal memuat permintaan reset kata sandi: ${loadError.message}`,
+          );
+      } finally {
+        if (active) setLoadingResetRequests(false);
+      }
+    }
+    loadPasswordResetRequests();
+    const intervalId = window.setInterval(loadPasswordResetRequests, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [usersRefreshKey]);
+  useEffect(() => {
+    let active = true;
     supabase
       .from("community_rooms")
       .select("id, name, description, mark")
@@ -2687,6 +3004,177 @@ function AdminDashboard() {
     setError("");
     setMessage("");
     setSearchParams(tab === "laporan" ? {} : { tab }, { replace: true });
+  }
+  async function callAdminUserApi(action, userId, values = {}) {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (!session) throw new Error("Sesi admin sudah berakhir. Silakan masuk lagi.");
+    const response = await fetch("/api/admin-users", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ action, userId, ...values }),
+    });
+    const result = await response.json();
+    if (!response.ok)
+      throw new Error(result.error || "Permintaan admin gagal.");
+    return result;
+  }
+  async function deleteOrder(order) {
+    if (
+      !window.confirm(
+        `Hapus transaksi ${order.id} secara permanen? Tindakan ini tidak dapat dibatalkan.`,
+      )
+    )
+      return;
+    setError("");
+    setUpdatingOrderId(order.id);
+    try {
+      const { error: deleteError } = await supabase
+        .from("store_orders")
+        .delete()
+        .eq("id", order.id);
+      if (deleteError) throw deleteError;
+      setOrders((current) => current.filter((item) => item.id !== order.id));
+      setMessage(`Transaksi ${order.id} berhasil dihapus.`);
+    } catch (deleteError) {
+      setError(`Transaksi gagal dihapus: ${deleteError.message}`);
+    } finally {
+      setUpdatingOrderId("");
+    }
+  }
+  async function saveUser(event, profile) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    setError("");
+    setUpdatingUserId(profile.id);
+    try {
+      const result = await callAdminUserApi("update", profile.id, {
+        fullName: String(values.get("fullName")).trim(),
+        email: String(values.get("email")).trim(),
+      });
+      setProfiles((current) =>
+        current.map((item) =>
+          item.id === profile.id
+            ? {
+                ...item,
+                full_name: String(values.get("fullName")).trim(),
+                ...(result.emailConfirmationRequired
+                  ? {}
+                  : { email: String(values.get("email")).trim() }),
+              }
+            : item,
+        ),
+      );
+      setMessage(
+        result.emailConfirmationRequired
+          ? "Nama diperbarui. Pengguna perlu mengonfirmasi perubahan email melalui pesan yang dikirim Supabase."
+          : "Data pengguna berhasil diperbarui.",
+      );
+    } catch (saveError) {
+      setError(`Data pengguna gagal diperbarui: ${saveError.message}`);
+    } finally {
+      setUpdatingUserId("");
+    }
+  }
+  async function deleteUser(profile) {
+    if (profile.id === user.id) {
+      setError("Akun admin yang sedang digunakan tidak dapat dihapus.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Hapus akun ${profile.email} secara permanen? Profil, transaksi, data database, dan file unggahan akun ini akan ikut terhapus dan tidak dapat dipulihkan.`,
+      )
+    )
+      return;
+    setError("");
+    setUpdatingUserId(profile.id);
+    try {
+      await callAdminUserApi("delete", profile.id);
+      setProfiles((current) => current.filter((item) => item.id !== profile.id));
+      setPasswordResetRequests((current) =>
+        current.filter((request) => request.user_id !== profile.id),
+      );
+      setMessage(`Akun ${profile.email} dan data terkait berhasil dihapus.`);
+    } catch (deleteError) {
+      setError(`Akun pengguna gagal dihapus: ${deleteError.message}`);
+    } finally {
+      setUpdatingUserId("");
+    }
+  }
+  async function reviewPasswordReset(request, approve) {
+    const profile = profiles.find((item) => item.id === request.user_id);
+    if (approve && !profile) {
+      setError("Profil pemilik permintaan tidak ditemukan.");
+      return;
+    }
+    setError("");
+    setReviewingRequestId(request.id);
+    try {
+      if (approve) {
+        const { data: reviewedRequest, error: reviewError } = await supabase
+          .from("password_reset_requests")
+          .update({
+            status: "approved",
+            reviewed_at: new Date().toISOString(),
+          })
+          .eq("id", request.id)
+          .eq("status", "pending")
+          .select("id")
+          .maybeSingle();
+        if (reviewError) throw reviewError;
+        if (!reviewedRequest)
+          throw new Error("Permintaan ini sudah ditinjau admin lain.");
+        const { error: emailError } =
+          await supabase.auth.resetPasswordForEmail(profile.email, {
+            redirectTo: `${window.location.origin}/atur-ulang-password`,
+          });
+        if (emailError) {
+          const { error: rollbackError } = await supabase
+            .from("password_reset_requests")
+            .update({ status: "pending", reviewed_at: null })
+            .eq("id", request.id)
+            .eq("status", "approved");
+          if (rollbackError)
+            throw new Error(
+              `Email reset gagal dikirim dan status persetujuan juga gagal dipulihkan: ${rollbackError.message}`,
+            );
+          throw emailError;
+        }
+      } else {
+        const { data: reviewedRequest, error: reviewError } = await supabase
+          .from("password_reset_requests")
+          .update({
+            status: "rejected",
+            reviewed_at: new Date().toISOString(),
+          })
+          .eq("id", request.id)
+          .eq("status", "pending")
+          .select("id")
+          .maybeSingle();
+        if (reviewError) throw reviewError;
+        if (!reviewedRequest)
+          throw new Error("Permintaan ini sudah ditinjau admin lain.");
+      }
+      setPasswordResetRequests((current) =>
+        current.filter((item) => item.id !== request.id),
+      );
+      setMessage(
+        approve
+          ? `Permintaan disetujui. Tautan reset dikirim ke ${profile.email}.`
+          : "Permintaan reset kata sandi ditolak.",
+      );
+    } catch (reviewError) {
+      setError(`Permintaan reset gagal diproses: ${reviewError.message}`);
+    } finally {
+      setReviewingRequestId("");
+    }
   }
   async function changeOrderStatus(orderId, status) {
     setError("");
@@ -3178,6 +3666,16 @@ function AdminDashboard() {
                             : "Pesanan ditolak"}
                         </span>
                       )}
+                      <button
+                        type="button"
+                        className="admin-delete"
+                        disabled={updatingOrderId === order.id}
+                        onClick={() => deleteOrder(order)}
+                      >
+                        {updatingOrderId === order.id
+                          ? "Memproses..."
+                          : "Hapus transaksi"}
+                      </button>
                     </div>
                   </article>
                 );
@@ -3419,14 +3917,76 @@ function AdminDashboard() {
             <button
               type="button"
               className="admin-inline-link"
-              disabled={loadingProfiles}
+              disabled={loadingProfiles || loadingResetRequests}
               onClick={() => {
                 setLoadingProfiles(true);
+                setLoadingResetRequests(true);
                 setUsersRefreshKey((current) => current + 1);
               }}
             >
               {loadingProfiles ? "Memperbarui..." : "↻ Perbarui"}
             </button>
+          </div>
+          <div className="admin-reset-requests">
+            <h3>Permintaan ganti/lupa kata sandi</h3>
+            <p>
+              Tautan reset hanya dikirim setelah admin menyetujui permintaan.
+            </p>
+            {resetRequestsError && (
+              <p className="error-note" role="alert">{resetRequestsError}</p>
+            )}
+            {loadingResetRequests ? (
+              <div className="community-status">Memuat permintaan...</div>
+            ) : passwordResetRequests.length ? (
+              <div className="admin-reset-request-list">
+                {passwordResetRequests.map((request) => {
+                  const profile = profiles.find(
+                    (item) => item.id === request.user_id,
+                  );
+                  return (
+                    <article key={request.id}>
+                      <div>
+                        <b>
+                          {profile?.full_name ||
+                            profile?.email ||
+                            "Pengguna"}
+                        </b>
+                        <small>
+                          {profile?.email || "Email tidak tersedia"} ·{" "}
+                          {new Date(request.created_at).toLocaleString("id-ID")}
+                        </small>
+                      </div>
+                      <div className="admin-reset-actions">
+                        <button
+                          type="button"
+                          className="admin-reject"
+                          disabled={reviewingRequestId === request.id}
+                          onClick={() => reviewPasswordReset(request, false)}
+                        >
+                          Tolak
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          disabled={
+                            reviewingRequestId === request.id || !profile
+                          }
+                          onClick={() => reviewPasswordReset(request, true)}
+                        >
+                          {reviewingRequestId === request.id
+                            ? "Memproses..."
+                            : "Setujui & kirim tautan"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="community-status">
+                Belum ada permintaan reset kata sandi.
+              </div>
+            )}
           </div>
           {!usersError && (
             <div className="admin-user-summary">
@@ -3481,6 +4041,53 @@ function AdminDashboard() {
                     <small className="admin-user-last-seen">
                       {isOnline ? "Aktif sekarang" : `Terakhir aktif: ${lastSeen}`}
                     </small>
+                    <details className="admin-user-edit">
+                      <summary>Edit nama/email</summary>
+                      <form onSubmit={(event) => saveUser(event, profile)}>
+                        <label>
+                          Nama lengkap
+                          <input
+                            name="fullName"
+                            defaultValue={profile.full_name}
+                            maxLength="80"
+                            required
+                          />
+                        </label>
+                        <label>
+                          Email
+                          <input
+                            name="email"
+                            type="email"
+                            defaultValue={profile.email}
+                            maxLength="254"
+                            required
+                          />
+                        </label>
+                        <button
+                          type="submit"
+                          className="btn-primary"
+                          disabled={updatingUserId === profile.id}
+                        >
+                          {updatingUserId === profile.id
+                            ? "Menyimpan..."
+                            : "Simpan"}
+                        </button>
+                      </form>
+                    </details>
+                    <button
+                      type="button"
+                      className="admin-delete"
+                      disabled={
+                        updatingUserId === profile.id || profile.id === user.id
+                      }
+                      onClick={() => deleteUser(profile)}
+                    >
+                      {profile.id === user.id
+                        ? "Admin aktif"
+                        : updatingUserId === profile.id
+                          ? "Memproses..."
+                          : "Hapus akun"}
+                    </button>
                   </article>
                 );
               })}
