@@ -11,17 +11,27 @@ npm install
 npm run dev
 ```
 
-Buka `http://localhost:5173`. Saat Supabase sudah dikonfigurasi, akun pelanggan, profil, dan state belanja masing-masing akun disimpan di project Supabase milik toko.
+Buka `http://localhost:5173`. Saat Supabase sudah dikonfigurasi, profil dan state belanja pelanggan disimpan per akun, sedangkan katalog, event, pesanan, dan status persetujuan pesanan menggunakan tabel toko bersama.
 
 ## Menghubungkan Supabase
 
-1. Di Supabase Dashboard, buka **SQL Editor**, pilih **New query**, lalu jalankan seluruh isi `supabase/schema.sql`. Ini membuat profil pelanggan dan penyimpanan data per akun dengan RLS.
+1. Di Supabase Dashboard, buka **SQL Editor**, pilih **New query**, lalu jalankan seluruh isi `supabase/schema.sql`. Ini membuat profil, penyimpanan data pelanggan, serta tabel bersama untuk produk, event, admin, dan pesanan dengan RLS.
 2. Dari halaman project Supabase, salin **Project URL** dan **publishable key** (atau legacy `anon` key) dari **Project Settings → API Keys**. Jangan gunakan `service_role`/secret key di browser.
 3. Salin `.env.example` menjadi `.env.local` di folder proyek. Isi `VITE_SUPABASE_URL` dan `VITE_SUPABASE_ANON_KEY` dengan nilai project Anda. File `.env.local` tidak boleh diunggah ke GitHub.
 4. Atur URL redirect konfirmasi email di **Authentication → URL Configuration**: tambahkan `http://localhost:5173/**` saat pengembangan dan URL domain produksi setelah hosting.
-5. Jalankan ulang `npm run dev`, lalu uji pendaftaran menggunakan email milik Anda. Jika konfirmasi email aktif, buka tautan di email dahulu sebelum login.
+5. Jadikan akun toko sebagai admin setelah akun tersebut terdaftar dan terkonfirmasi. Di **SQL Editor**, ganti email contoh berikut dengan email akun toko lalu jalankan:
 
-Pemilik project dapat melihat akun di **Authentication → Users**, profil di **Table Editor → profiles**, dan data tiap akun di **Table Editor → customer_data**. RLS membatasi pengguna agar hanya bisa membaca/mengubah baris miliknya sendiri; pemilik project mengelola seluruh data lewat dashboard Supabase.
+   ```sql
+   insert into public.store_admins (user_id)
+   select id from auth.users where email = 'admin@tokoanda.com'
+   on conflict (user_id) do nothing;
+   ```
+
+   Setelah itu, keluar lalu masuk kembali. Tautan **Kelola toko** akan muncul di navigasi. Jangan pernah memberi akses admin kepada akun pelanggan.
+
+6. Jalankan ulang `npm run dev`, lalu uji pendaftaran menggunakan email milik Anda. Jika konfirmasi email aktif, buka tautan di email dahulu sebelum login.
+
+Pemilik project dapat melihat akun di **Authentication → Users**, profil di **Table Editor → profiles**, data per akun di **Table Editor → customer_data**, serta data bersama di tabel `store_products`, `store_events`, dan `store_orders`. RLS membatasi pelanggan agar hanya bisa melihat pesanan miliknya; hanya admin yang terdaftar melalui SQL dapat melihat semua pesanan dan mengelola katalog/event.
 
 ## Hosting untuk dibagikan
 
@@ -35,11 +45,14 @@ URL/key publishable memang digunakan aplikasi browser; keamanan database bergant
 ## Fitur
 
 - Katalog dan detail produk dapat dilihat tanpa akun; wishlist, keranjang, checkout, profil, dan riwayat pesanan memerlukan akun Supabase.
+- Panel `/admin` berisi laporan produk terlaris dan pesanan, alur status pesanan (menunggu persetujuan → disetujui → dikemas → dikirim → selesai), pemantauan jumlah pengguna beserta status online/offline, dan pengelolaan koleksi, event, serta ruang/cerita komunitas. Status online adalah perkiraan dari aktivitas akun dalam dua menit terakhir.
+- Form admin untuk produk, event, dan cerita komunitas menerima unggahan gambar langsung dari perangkat; file JPG, PNG, atau WebP hingga 5 MB disimpan di Supabase Storage.
 - Setiap event memiliki halaman detail, susunan acara, informasi lokasi/waktu, dan pendaftaran RSVP. Pengguna yang masuk mendapat tiket QR unik yang tersimpan di data akunnya dan dapat dicetak.
 - Cerita komunitas dibagikan lintas pengguna melalui Supabase dan dipecah menjadi ruang Outfit harian, Mix & match, Brand lokal, Gaya berkelanjutan, dan Event Nusa; semua orang dapat melihat feed, sedangkan pengguna yang masuk dapat memposting cerita, mengunggah foto opsional, dan menyukai cerita.
-- Profil dan state belanja tersimpan di Supabase per akun dan dapat dikelola pemilik toko di Supabase Dashboard.
+- Pembeli dengan pesanan yang telah disetujui dapat mengirim satu ulasan per produk berupa rating, komentar, dan foto opsional. Foto ulasan menggunakan bucket `community-images`.
+- Profil dan state belanja tersimpan di Supabase per akun. Katalog/event bersama dan pesanan menunggu persetujuan admin tersimpan di tabel toko dengan kebijakan RLS.
 
-Jalankan kembali seluruh isi `supabase/schema.sql` di Supabase SQL Editor untuk membuat feed bersama, ruang kategori, dan bucket `community-images`. Jika unggahan cerita gagal karena tabel atau bucket belum tersedia, jalankan kembali schema tersebut, lalu gunakan tombol **Muat ulang cerita**. Foto cerita menerima JPG, PNG, atau WebP hingga 5 MB; tanpa foto, aplikasi memakai `public/images/community-style.jpg`. Gambar katalog disimpan di `public/images/` dan bersumber dari Unsplash. Gambar-gambar tersebut adalah foto stok, bukan salinan dari Pinterest; periksa lisensi dan ketentuan penggunaan sebelum menerbitkan toko. Pembayaran masih simulasi dan konfirmasi pesanan dilakukan manual. RSVP dan tiket QR event disimpan pada data akun Supabase yang dilindungi RLS. QR berisi kode tiket unik agar dapat dibaca pemindai QR; aplikasi belum menyediakan halaman panitia untuk memvalidasi check-in secara otoritatif. Sebelum dipakai untuk acara berbayar atau check-in resmi, tambahkan endpoint/backend dan akses panitia agar tiket tidak dapat dipalsukan atau dipakai ulang.
+Jalankan kembali seluruh isi `supabase/schema.sql` di Supabase SQL Editor untuk membuat feed bersama, ruang kategori, ulasan produk, pemantauan aktivitas, dan bucket `community-images`. Jika unggahan cerita atau ulasan gagal karena tabel atau bucket belum tersedia, jalankan kembali schema tersebut, lalu muat ulang halaman. Foto cerita dan ulasan menerima JPG, PNG, atau WebP hingga 5 MB; tanpa foto cerita, aplikasi memakai `public/images/community-style.jpg`. Gambar katalog disimpan di `public/images/` dan bersumber dari Unsplash. Gambar-gambar tersebut adalah foto stok, bukan salinan dari Pinterest; periksa lisensi dan ketentuan penggunaan sebelum menerbitkan toko. Pembayaran masih simulasi dan konfirmasi pesanan dilakukan manual. RSVP dan tiket QR event disimpan pada data akun Supabase yang dilindungi RLS. QR berisi kode tiket unik agar dapat dibaca pemindai QR; aplikasi belum menyediakan halaman panitia untuk memvalidasi check-in secara otoritatif. Sebelum dipakai untuk acara berbayar atau check-in resmi, tambahkan endpoint/backend dan akses panitia agar tiket tidak dapat dipalsukan atau dipakai ulang.
 
 ## Kontak contoh
 
